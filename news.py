@@ -1,0 +1,194 @@
+"""Optional current context from Google News RSS. Must degrade to nothing on any failure.
+
+News is enrichment, never a dependency: every failure path returns an empty list,
+and relevance is decided by plain keyword overlap, not by a model.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import calendar
+import logging
+from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
+
+import feedparser
+import httpx
+
+import config
+
+log = logging.getLogger(__name__)
+
+GOOGLE_NEWS_RSS = "https://news.google.com/rss/search"
+REQUEST_TIMEOUT_SECONDS = 10.0
+MAX_RETRIES = 3
+BACKOFF_BASE_SECONDS = 1.0
+MIN_KEYWORD_LENGTH = 4
+# Too generic to count as a topical match on their own.
+GENERIC_WORDS = frozenset({"india", "indian", "news", "latest", "update", "brand", "brands", "market"})
+
+# Words that mark a headline as being about skincare/beauty.
+DOMAIN_WORDS: tuple[str, ...] = ("skin", "cosmetic", "beauty", "sunscreen", "spf", "serum", "moistur",
+                                 "derma", "personal care", "cream", "lotion", "ingredient", "formulat", "fragrance")
+
+# Publishers whose headlines may be cited. Google News aggregates everything (press releases,
+# content farms); a hook must come from a recognisable newsroom or trade title.
+CREDIBLE_SOURCES = frozenset({
+    "the hindu", "hindu businessline", "businessline", "mint", "livemint", "mint lounge",
+    "the economic times", "economic times", "etretail", "et healthworld", "business standard",
+    "hindustan times", "the indian express", "indian express", "the times of india", "times of india",
+    "financial express", "moneycontrol", "business today", "cnbc tv18", "cnbctv18", "ndtv", "ndtv profit",
+    "deccan herald", "the print", "theprint", "scroll", "scroll.in", "the news minute", "forbes india",
+    "fortune india", "outlook business", "yourstory", "inc42", "entrackr", "reuters", "bbc", "bbc news",
+    "the guardian", "financial times", "bloomberg", "vogue india", "vogue business", "business of fashion",
+    "the business of fashion", "elle india", "harper's bazaar india", "femina", "cosmetics business",
+    "cosmeticsdesign-asia.com", "cosmetics design asia", "cosmeticsdesign.com", "personal care insights",
+    "premium beauty news", "happi", "global cosmetic industry",
+})
+
+# Tests swap this for an httpx.MockTransport.
+_transport: httpx.AsyncBaseTransport | None = None
+
+
+@dataclass(frozen=True)
+class NewsItem:
+    title: str
+    source: str
+    url: str
+    published: datetime | None
+
+
+def build_params(keywords: str) -> dict[str, str]:
+    return {
+        "q": f"{keywords} when:{config.settings.news_max_age_days}d",
+        "hl": "en-IN",
+        "gl": "IN",
+        "ceid": "IN:en",
+    }
+
+
+def significant_words(keywords: str) -> list[str]:
+    return [w for w in keywords.lower().split() if len(w) >= MIN_KEYWORD_LENGTH and w not in GENERIC_WORDS]
+
+
+def is_relevant(item: NewsItem, keywords: str) -> bool:
+    """Two of the note's topical words in the headline, or one plus a skincare/beauty word.
+
+    The domain check keeps a single shared word from pulling in another industry
+    ("preservative" in a pickles story). Whether a relevant hook is actually used is still
+    decided by the draft prompt's "only if it genuinely fits" rule and the fact check.
+    """
+    title = item.title.lower()
+    hits = sum(1 for w in significant_words(keywords) if w in title)
+    return hits >= 2 or (hits == 1 and any(d in title for d in DOMAIN_WORDS))
+
+
+def search_queries(keywords: str) -> list[str]:
+    """Narrow to broad: the full keywords, then the first 3, 2 and 1 topical words.
+
+    Google News requires every word to match, so a precise query often finds nothing
+    while the main topic word ("sunscreen") finds this week's coverage.
+    """
+    words = significant_words(keywords)
+    queries = [keywords] + [" ".join(words[:n]) for n in (3, 2, 1)]
+    return list(dict.fromkeys(q for q in queries if q))
+
+
+def is_credible(item: NewsItem) -> bool:
+    return item.source.strip().lower() in CREDIBLE_SOURCES
+
+
+def to_record(item: NewsItem, relevance: str) -> dict[str, str]:
+    """What gets stored and shown to Meera for a cited news hook."""
+    return {
+        "headline": item.title,
+        "source": item.source,
+        "date": item.published.strftime("%d %b %Y") if item.published else "unknown",
+        "url": item.url,
+        "relevance": relevance,
+    }
+
+
+def is_recent(item: NewsItem, now: datetime) -> bool:
+    if item.published is None:
+        return False
+    age = now - item.published
+    # A day of future slack absorbs publisher clock/timezone skew.
+    return -timedelta(days=1) <= age <= timedelta(days=config.settings.news_max_age_days)
+
+
+def parse_items(xml: bytes) -> list[NewsItem]:
+    feed = feedparser.parse(xml)
+    items = []
+    for entry in feed.entries:
+        url = str(entry.get("link", ""))
+        title = str(entry.get("title", "")).strip()
+        source = str(entry.get("source", {}).get("title", "")).strip()
+        if not url.startswith("https://") or not title:
+            continue
+        # Google News appends " - Publisher" to titles; keep the headline only.
+        if source and title.endswith(f" - {source}"):
+            title = title[: -len(f" - {source}")].strip()
+        published = None
+        if entry.get("published_parsed"):
+            published = datetime.fromtimestamp(calendar.timegm(entry.published_parsed), tz=UTC)
+        items.append(NewsItem(title=title, source=source or "unknown", url=url, published=published))
+    return items
+
+
+def _retryable(exc: Exception) -> bool:
+    if isinstance(exc, httpx.HTTPStatusError):
+        return exc.response.status_code == 429 or exc.response.status_code >= 500
+    return isinstance(exc, (httpx.TimeoutException, httpx.TransportError))
+
+
+async def _fetch(params: dict[str, str]) -> bytes:
+    async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT_SECONDS, follow_redirects=True,
+                                 transport=_transport) as client:
+        for attempt in range(MAX_RETRIES + 1):
+            try:
+                response = await client.get(GOOGLE_NEWS_RSS, params=params)
+                response.raise_for_status()
+                return response.content
+            except Exception as exc:
+                if not _retryable(exc) or attempt == MAX_RETRIES:
+                    raise
+                delay = BACKOFF_BASE_SECONDS * 2**attempt
+                log.warning("news.retry attempt=%d error=%s wait_s=%.1f", attempt + 1, type(exc).__name__, delay)
+                await asyncio.sleep(delay)
+    raise AssertionError("unreachable")
+
+
+async def _search(keywords: str, now: datetime) -> tuple[int, list[NewsItem]]:
+    items = parse_items(await _fetch(build_params(keywords)))
+    return len(items), [i for i in items if is_recent(i, now) and is_credible(i) and is_relevant(i, keywords)]
+
+
+async def fetch_news(keywords: str, now: datetime | None = None) -> list[NewsItem]:
+    """Recent, credible, relevant headlines for these keywords; [] on any failure or if nothing fits."""
+    keywords = keywords.strip()
+    words = significant_words(keywords)
+    if not words:
+        return []
+    now = now or datetime.now(UTC)
+    try:
+        fetched, kept = 0, []
+        for query in search_queries(keywords):
+            fetched, kept = await _search(query, now)
+            # Relevance is always judged against the note's full keywords, not the broadened query.
+            kept = [i for i in kept if is_relevant(i, keywords)]
+            if kept:
+                break
+    except Exception as exc:
+        log.warning("news.unavailable error=%s", type(exc).__name__)
+        return []
+    # Newest first, one per URL.
+    seen: set[str] = set()
+    unique = []
+    for item in sorted(kept, key=lambda i: i.published, reverse=True):
+        if item.url not in seen:
+            seen.add(item.url)
+            unique.append(item)
+    result = unique[: config.settings.news_max_items]
+    log.info("news.fetched fetched=%d relevant=%d returned=%d", fetched, len(kept), len(result))
+    return result
