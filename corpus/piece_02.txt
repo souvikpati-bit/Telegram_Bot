@@ -1,0 +1,9 @@
+In 2021 I was sitting in a stability review meeting for a vitamin C serum at the pharma company where I worked. The data on the screen showed the active degrading faster than the shelf life on the carton allowed for.
+
+The explanation offered in the room was reasonable on paper. The samples had been stored under standard test conditions, the product would be sold with an expiry date, and the numbers were within what the process accepted. What nobody said out loud was that those standard conditions looked nothing like a bathroom shelf in Mumbai in August.
+
+I asked whether we had any data at higher humidity. We did not. Nobody else in the room asked about it. The formulation passed review. I left the company 7 months later.
+
+I'm not saying the people in that room were incompetent or malicious. They were following a process that had been designed somewhere else, for somewhere else, and the process said yes. That is the uncomfortable part. A product can pass every check it is given and still not hold up where it is actually used.
+
+That meeting is a large part of why Skinstinct exists. When you are looking at a product with an unstable active, the question worth asking is not only when it expires. It is what conditions the stability testing was done in, and whether anyone tested it in a climate like yours.
