@@ -32,6 +32,8 @@ cp .env.example .env   # fill in the five required values
 .venv/Scripts/python config.py   # prints settings with secrets masked, or names what's missing
 ```
 
+**Voice corpus:** `corpus/` currently holds seven stand-in pieces reconstructed from `PLAN.md`, because Meera's 15 published pieces weren't in the repo. Replace them with her real writing (see `corpus/README.md`) before trusting the drafts' voice.
+
 Required values: `TELEGRAM_BOT_TOKEN` (from @BotFather), `TELEGRAM_CHAT_ID` (capture channel, starts with `-100`), `TELEGRAM_REVIEW_CHAT_ID` (Meera's private chat with the bot, which is her user id), `MEERA_USER_ID`, `GEMINI_API_KEY`. The bot must be an admin of the capture channel, and Meera must press **Start** in her chat with the bot before it can message her.
 
 ## Run locally (long-polling)

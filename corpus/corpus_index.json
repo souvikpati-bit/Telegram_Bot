@@ -1,0 +1,9 @@
+{
+  "1": {"source_id": "seed-linkedin-niacinamide", "format": "linkedin", "category": "Ingredient Deep-Dive", "title": "What a niacinamide percentage doesn't tell you", "path": "piece_01.txt"},
+  "2": {"source_id": "seed-linkedin-stability-meeting", "format": "linkedin", "category": "Founder Story", "title": "The stability review meeting that started Skinstinct", "path": "piece_02.txt"},
+  "3": {"source_id": "seed-linkedin-humidity-returns", "format": "linkedin", "category": "India-Specific Context", "title": "What our returns data taught us about humidity", "path": "piece_03.txt"},
+  "4": {"source_id": "seed-linkedin-vitamin-c", "format": "linkedin", "category": "Formulation Science", "title": "Fourteen months into a vitamin C serum", "path": "piece_04.txt"},
+  "5": {"source_id": "seed-newsletter-welcome", "format": "newsletter", "category": "Brand Philosophy", "title": "Why this list won't sell you things", "path": "piece_05.txt"},
+  "6": {"source_id": "seed-newsletter-clean", "format": "newsletter", "category": "Industry Transparency", "title": "What 'clean' actually means on a label", "path": "piece_06.txt"},
+  "7": {"source_id": "seed-newsletter-sunscreen", "format": "newsletter", "category": "Consumer Education", "title": "Why sunscreen behaves differently in India", "path": "piece_07.txt"}
+}
